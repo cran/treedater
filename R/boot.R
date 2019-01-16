@@ -55,9 +55,7 @@
 #' # make a random tree
 #' tre <- ape::rtree(25)
 #' # simulate sample times based on distance from root to tip:
-#' sts <- setNames(  
-#' ape::dist.nodes( tre)[(length(tre$tip.label)+1), 1:(length(tre$tip.label)+1)]
-#' , tre$tip.label)
+#' sts <- setNames( ape::node.depth.edgelength( tre )[1:ape::Ntip(tre)], tre$tip.label)
 #' # modify edge length to represent evolutionary distance with rate 1e-3:
 #' tre$edge.length <- tre$edge.length * 1e-3
 #' # treedater: 
@@ -233,9 +231,7 @@ parboot <- function( td , nreps = 100, ncpu = 1,  overrideTempConstraint=TRUE, o
 #' # simulate a tree 
 #' tre <- ape::rtree(25)
 #' # sample times based on distance from root to tip:
-#' sts <- setNames(  
-#' ape::dist.nodes( tre)[(length(tre$tip.label)+1), 1:(length(tre$tip.label)+1)]
-#' , tre$tip.label)
+#' sts <- setNames( ape::node.depth.edgelength( tre )[1:ape::Ntip(tre)], tre$tip.label)
 #' # make a list of trees that simulate outcome of bootstrap using nonparametric phylogeny estimation
 #' # also modify edge length to represent evolutionary distance with rate 1e-3:
 #' bootTrees <- lapply( 1:25, function(i) {
@@ -397,9 +393,7 @@ boot <- function( td, tres,  ncpu = 1, searchRoot=1 , overrideTempConstraint=TRU
 #' # simulate a tree 
 #' tre <- ape::rtree(25)
 #' # sample times based on distance from root to tip:
-#' sts <- setNames(  
-#' ape::dist.nodes( tre)[(length(tre$tip.label)+1), 1:(length(tre$tip.label)+1)]
-#' , tre$tip.label)
+#' sts <- setNames( ape::node.depth.edgelength( tre )[1:ape::Ntip(tre)], tre$tip.label)
 #' # modify edge length to represent evolutionary distance with rate 1e-3:
 #' tre$edge.length <- tre$edge.length * 1e-3
 #' relaxedClockTest( tre, sts, nreps=25)
@@ -461,23 +455,34 @@ print.bootTreedater = print.boot.treedater <- function( x, ... )
 #' @param t0 The lower bound of the time axis to show
 #' @param res The number of time points on the time axis
 #' @param ggplot If TRUE, will return a plot made with the ggplot2 package
+#' @param cumulative If TRUE, will show only decreasing lineages through time
 #' @param ... Additional arg's are passed to *ggplot* or *plot*
 #' @export 
-plot.bootTreedater <- function(x, t0 = NA, res = 100, ggplot=FALSE, ... )
+plot.bootTreedater <- function(x, t0 = NA, res = 100, ggplot=FALSE, cumulative=FALSE, ... )
 {
 	pbtd = x
 	stopifnot(inherits(pbtd, "bootTreedater"))
 	t1 <- max( pbtd$td$sts, na.rm=T )
 	if (is.na(t0)) t0 <- min( sapply( pbtd$trees, function(tr) tr$timeOf ) )
 	times <- seq( t0, t1, l = res )
-	cbind( times = times , t( sapply( times, function(t){
-		c( pml = sum(pbtd$td$sts > t ) - sum( pbtd$td$Ti>t ) 
-			, setNames(quantile( sapply( pbtd$trees, function(tre ) sum( tre$sts > t) - sum( tre$Ti > t ) )
-			 , probs = c( .025, .5, .975 ) 
-			), c('lb', 'median', 'ub') )
-		)
-	}))) -> ltt
-	
+	if (cumulative)
+	{
+		cbind( times = times , t( sapply( times, function(t){
+			c( pml = length(pbtd$td$sts) - sum( pbtd$td$Ti>t ) 
+				, setNames(quantile( sapply( pbtd$trees, function(tre ) length(pbtd$td$sts) - sum( tre$Ti > t ) )
+				 , probs = c( .025, .5, .975 ) 
+				), c('lb', 'median', 'ub') )
+			)
+		}))) -> ltt
+	} else{
+		cbind( times = times , t( sapply( times, function(t){
+			c( pml = sum(pbtd$td$sts > t ) - sum( pbtd$td$Ti>t ) 
+				, setNames(quantile( sapply( pbtd$trees, function(tre ) sum( tre$sts > t) - sum( tre$Ti > t ) )
+				 , probs = c( .025, .5, .975 ) 
+				), c('lb', 'median', 'ub') )
+			)
+		}))) -> ltt
+	}
 	# resolve NOTE about 'no visible binding for global variables'
 	pml = NULL
 	ub = NULL 
@@ -492,9 +497,10 @@ plot.bootTreedater <- function(x, t0 = NA, res = 100, ggplot=FALSE, ... )
 		return (p <- p + ggplot2::ylab( 'Lineages through time') + ggplot2::xlab('Time')  )
 	}
 	with( pl.df ,{
-		plot( times, lb, type = 'l', lty = 3, lwd = 1, xlab = 'Time', ylab= 'Lineages through time'#, main='' 
+		graphics::plot( times, lb, type = 'l', lty = 3, lwd = 1, xlab = 'Time', ylab= 'Lineages through time'#, main='' 
 		  , ylim = c(0, max(ub)+1)  , ...)
-		lines( times, ub, lty = 3, lwd = 1)
-		lines( times, pml, lwd = 2) 
+		graphics::lines( times, ub, lty = 3, lwd = 1)
+		graphics::lines( times, pml, lwd = 2) 
 	})
 }
+
