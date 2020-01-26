@@ -92,7 +92,8 @@ sampleYearsFromLabels <- function(tips, dateFormat='%Y-%m-%d'
 	bin[tipEdges] <- sts # terminal edges to -sample time #...
 	
 	W <- abs( 1/( (tre$edge.length + cc / s)/s) ) 
-	#W <- abs( 1/( pmax(.001,tre$edge.length) )/s)
+	
+	postorder_internal_nodes <- unique( tre$edge[ ape::postorder( tre ),1] )
 	
 	list( A0 = A, B0 = B, W0 = W, n = n, tipEdges=tipEdges
 	 , i_tip_edge2label = i_tip_edge2label
@@ -104,14 +105,10 @@ sampleYearsFromLabels <- function(tips, dateFormat='%Y-%m-%d'
 	 , parent = parent
 	 , Ain = Ain
 	 , bin = bin
+	 , postorder_internal_nodes = postorder_internal_nodes
 	)
 }
 
-.Ti2blen <- function(Ti, td ){
-	Ti <- c( td$sts[td$tre$tip.label], Ti)
-	elmat <- cbind( Ti[td$tre$edge[,1]], Ti[td$tre$edge[,2]])
-	pmax(td$minblen,-elmat[,1]  + elmat[,2] )
-}
 
 .optim.r.gammatheta.nbinom0 <- function(  Ti, r0, gammatheta0, td, lnd.mean.rate.prior)
 {	
@@ -127,8 +124,8 @@ sampleYearsFromLabels <- function(tips, dateFormat='%Y-%m-%d'
 		if (is.infinite(r) | is.infinite(gammatheta)) return(Inf)
 		ps <- pmin(1 - 1e-5, gammatheta*blen / ( 1+ gammatheta * blen ) )
 		ov <- -sum( dnbinom( pmax(0, round(td$tre$edge.length*td$s))
-		  , size= r, prob=1-ps,  log = T) )
-		mr <-  r * gammatheta / td$s # Note this value will differ slightly from output of .mean.rate
+		  , size= r, prob=1-ps,  log = TRUE) )
+		mr <-  r * gammatheta / td$s 
 		ov <- ov - unname(lnd.mean.rate.prior( mr ))
 		ov 
 	}
@@ -139,6 +136,35 @@ sampleYearsFromLabels <- function(tips, dateFormat='%Y-%m-%d'
 	r <- unname( exp( o$par['lnr'] ))
 	gammatheta <- unname( exp( o$par['lngammatheta'] ))
 	list( r = r, gammatheta=gammatheta, ll = -o$value)
+}
+
+# additive varianc model of x didelot  
+.optim.nbinom1 <- function(  Ti, mu0, sp0, td, lnd.mean.rate.prior)
+{	
+	blen <- .Ti2blen( Ti, td )
+	
+	#NOTE relative to wikipedia page on NB:
+	#size = r
+	#1-prob = p
+	of <- function(x)
+	{
+		sp <- exp( x[ 'lnsp' ] )
+		mu <- exp( x['lnmu'] )
+		if (is.infinite(sp) | is.infinite(mu)) return(Inf)
+		sizes <- mu * blen / sp 
+		ov <- -sum( dnbinom( pmax(0, round(td$tre$edge.length*td$s))
+		  , size = sizes
+		  , prob = 1 - sp / ( 1+sp ),  log = TRUE) )
+		ov <- ov - unname(lnd.mean.rate.prior( mu  / td$s))
+		ov 
+	}
+	x0 <- c( lnmu = unname(log(mu0)), lnsp = unname( log(sp0)))
+	#o <- optim( par = x0, fn = of, method = 'BFGS' )
+	if ( is.infinite( of( x0 )) ) stop( 'Can not optimize rate parameters from initial conditions. Try adjusting *meanRateLimits*.' )
+	o <- optim( par = x0, fn = of)
+	mu <- unname( exp( o$par['lnmu'] ))
+	sp <- unname( exp( o$par['lnsp'] ))
+	list( mu = mu, sp = sp, ll = -o$value)
 }
 
 .optim.omega.poisson0 <- function(Ti, omega0, td, lnd.mean.rate.prior, meanRateLimits)
@@ -184,13 +210,7 @@ sampleYearsFromLabels <- function(tips, dateFormat='%Y-%m-%d'
 		B <- td$B0
 		B[td$tipEdges] <- td$B0[td$tipEdges] -  unname( omegas[td$tipEdges] * td$sts2 )
 		# initial feasible parameter values:
-		p0 <- ( coef( lm ( B ~ A -1 , weights = td$W) ) )
-		if (any(is.na(p0))){
-			warning('Numerical error when performing least squares optimisation. Values are approximate. Try adjusting minimum branch length(`minblen`) and/or initial rate omega0.')
-			p0[is.na(p0)] <- max(p0, na.rm=T)
-		}
-		p1 <- .hack.times1(p0, td )
-	
+			
 	w <- sqrt(td$W)
 	unname( lsei( A = A * w
 	 , B = B * w
@@ -210,7 +230,6 @@ sampleYearsFromLabels <- function(tips, dateFormat='%Y-%m-%d'
 		B[td$tipEdges] <- td$B0[td$tipEdges] -  unname( omegas[td$tipEdges] * td$sts2 )
 		
 		# initial feasible parameter values:
-		#p0 <- ( coef( lm ( B ~ A -1 , weights = td$W/omegas) ) )
 		p0 <- ( coef( lm ( B ~ A -1 , weights = td$W) ) )
 		if (any(is.na(p0))){
 			warning('Numerical error when performing least squares optimisation. Values are approximate. Try adjusting minimum branch length(`minblen`) and/or initial rate omega0.')
@@ -251,6 +270,26 @@ sampleYearsFromLabels <- function(tips, dateFormat='%Y-%m-%d'
 }
 
 
+# using additive relaxed clock model 
+.optim.omegas.gammaPoisson2 <- function( Ti, mu, sp , td )
+{
+	blen <- .Ti2blen( Ti, td )
+	o <- sapply( 1:nrow( td$tre$edge ), function(k) {
+		tau <- blen[k] 
+		x <- (td$tre$edge.length[k]*td$s)
+		#lb <- qgamma(1e-6,  shape= mu*tau/sp , scale = sp ) # gives values too close to zero
+		lb <- mu / 100# TODO would be nice to have a nice way to  choose this lower bound
+		lam_star <- max(lb
+		 , (mu*tau - sp + x * sp)  /  (sp + 1 )  # yup. 
+		# , (mu*tau - sp + x * sp)  /  (sp + tau ) # nope.
+		)
+		ll <- dpois( max(0, round(x)),lam_star, log=T )  + 
+		 dgamma(lam_star, shape=mu*tau/sp , scale = sp / tau , log = T) 
+		c( lam_star / tau / td$s, ll )
+	})
+	list( omegas = o[1,] , ll = unname( sum( o[2,] )), lls = unname(o[2,] ) )
+}
+
 .optim.sampleTimes0 <- function( Ti, omegas, estimateSampleTimes, estimateSampleTimes_densities, td, iedge_tiplabel_est_samp_times )
 {
 	blen <- .Ti2blen( Ti, td )
@@ -262,6 +301,7 @@ sampleYearsFromLabels <- function(tips, dateFormat='%Y-%m-%d'
 		tu <- Ti[u-td$n]
 		of <- function(tv){
 			.blen <- tv - tu 
+if( .blen < 0 ) browser() 
 			-dst(tv, V) -
 			  dpois( max(0, round(td$tre$edge.length[k]*td$s))
 			  , td$s * .blen * omegas[k] 
@@ -276,13 +316,15 @@ sampleYearsFromLabels <- function(tips, dateFormat='%Y-%m-%d'
 	o
 }
 
-
-.mean.rate <- function(Ti, r, gammatheta, omegas, td)
-{
-	if (is.infinite(r)) return(gammatheta) # poisson model
-	blen <- .Ti2blen( Ti, td )
-	sum( omegas * blen ) / sum(blen)
+.Ti2blen <- function(Ti, td, enforce_minblen = TRUE ){
+	Ti <- c( td$sts[td$tre$tip.label], Ti)
+	elmat <- cbind( Ti[td$tre$edge[,1]], Ti[td$tre$edge[,2]])
+	if ( enforce_minblen )
+		return( pmax(td$minblen,-elmat[,1]  + elmat[,2] ) )
+	else 
+		return( -elmat[,1]  + elmat[,2] )
 }
+
 
 .hack.times1 <- function(Ti, td)
 {
@@ -300,6 +342,23 @@ sampleYearsFromLabels <- function(tips, dateFormat='%Y-%m-%d'
 	t[inodes]
 }
 
+
+.fix.Ti <- function(Ti, td){
+	.Ti <- Ti
+	n <- 1 + length(Ti)
+	sts_Ti <- c( td$sts1[td$tre$tip.label], Ti)
+	for ( i in td$postorder_internal_nodes-n ){
+		uv <- td$daughters[ i+n, ] 
+		if ( !is.na(sts_Ti[uv[1]]))
+			Ti[i] <- min( Ti[i], sts_Ti[uv[1]] - td$minblen  )
+		if ( !is.na(sts_Ti[uv[2]]))
+			Ti[i] <- min( Ti[i], sts_Ti[uv[2]] - td$minblen  )
+		sts_Ti[ i + n ] <- Ti[i]
+	}
+	Ti
+}
+
+
 .dater <- function(tre, sts, s=1e3
  , omega0 = NA
  , minblen = NA
@@ -308,10 +367,10 @@ sampleYearsFromLabels <- function(tips, dateFormat='%Y-%m-%d'
  , searchRoot = 5
  , quiet = TRUE
  , temporalConstraints = TRUE
- , strictClock = FALSE
+ , clock = c('strict',  'uncorrelated', 'additive')
  , estimateSampleTimes = NULL
  , estimateSampleTimes_densities= list()
- , numStartConditions = 0
+ , numStartConditions = 1
  , clsSolver=c('limSolve', 'mgcv')
  , meanRateLimits = NULL
  , ncpu = 1
@@ -320,7 +379,10 @@ sampleYearsFromLabels <- function(tips, dateFormat='%Y-%m-%d'
  , tiplabel_est_samp_times = NULL
 )
 {
-	clsSolver <- match.arg( clsSolver) 
+	clsSolver <- match.arg( clsSolver, choices = c('limSolve', 'mgcv')) 
+	clock <- match.arg( clock , choices = c('uncorrelated', 'additive', 'strict') ) 
+	if ( clock == 'additive' )
+		stop('ARC model not implemented')
 	# defaults
 	CV_LB <- 1e-6 # lsd tests indicate Gamma-Poisson model may be more accurate even in strict clock situation
 	cc <- 10
@@ -333,19 +395,27 @@ sampleYearsFromLabels <- function(tips, dateFormat='%Y-%m-%d'
 	if (is.na(omega0)){
 		# guess
 		#omega0 <- estimate.mu( tre, sts )
-		g0 <- lm(ape::node.depth.edgelength(tre)[1:length(sts)] ~ sts, na.action = na.omit)
-		omega0sd <- summary( g0 )$coef[2,2]
-		omega0 <- unname( coef(g0)[2] )
-		if (omega0 < 0 ){
-			warning('Root to tip regression predicts a substition rate less than zero. Tree may be poorly rooted or there may be small temporal signal.')
-			omega0 <- abs(omega0)/10
-		}
-		omega0s <- qnorm( unique(sort(c(.5, seq(.025, .975, l=numStartConditions*2) )))  , omega0, sd = omega0sd )
+		# start conditiosn based on rtt
+			g0 <- lm(ape::node.depth.edgelength(tre)[1:length(sts)] ~ sts, na.action = na.omit)
+			omega0sd <- suppressWarnings(summary( g0 ))$coef[2,2]
+			omega0 <- unname( coef(g0)[2] )
+			if (omega0 < 0 ){
+				warning('Root to tip regression predicts a substition rate less than zero. Tree may be poorly rooted or there may be small temporal signal.')
+				omega0 <- abs(omega0)/10
+			}
+			omega0s <- qnorm( unique(sort(c(.5, seq(.001, .999, l=numStartConditions*2) )))  , omega0, sd = omega0sd )
+		#start conditiosn based on earliest sample 
+			D <- ape::cophenetic.phylo( tre ) [1:ape::Ntip(tre), 1:ape::Ntip(tre)]
+			esi <- which.min( sts )[1]
+			g1 <- lm( D[esi,] ~ sts )
+			omega0sd.1 <- suppressWarnings(summary( g1 ))$coef[2,2]
+			omega0.1 <- unname( coef(g1)[2] )
+			omega0s.1 <- qnorm( unique(sort(c(.5, seq(.001, .999, l=numStartConditions*2) )))  , omega0.1, sd = omega0sd.1 )
+		
+		
+		omega0s <- sort( unique( c( omega0s, omega0s.1 ) ))
 		omega0s <- omega0s[ omega0s > 0 ]
-		#if (!quiet){
-		#	cat('initial rates:\n')
-		#	print(omega0s)
-		#}
+		cat( paste( 'Initial guesses of substitution rate:', paste(collapse=',', omega0s), '\n')  )
 	} else{
 		omega0s <- c( omega0 )
 	}
@@ -364,8 +434,10 @@ sampleYearsFromLabels <- function(tips, dateFormat='%Y-%m-%d'
 	bestrv <- list()
 	for ( omega0 in omega0s ){
 		# initial gamma parms with small variance
-		r = r0 <- ifelse(strictClock, Inf, sqrt(10))  #sqrt(r) = 10 
-		gammatheta = gammatheta0 <- ifelse(strictClock, omega0, omega0 * td$s / r0)
+		r = r0 <- ifelse(clock=='strict', Inf, sqrt(10))  #sqrt(r) = 10 
+		gammatheta = gammatheta0 <- ifelse(clock=='strict', omega0, omega0 * td$s / r0)
+		mu = omega0  * td$s
+		sp = 1e-2
 		
 		done <- FALSE
 		lastll <- -Inf
@@ -384,10 +456,13 @@ sampleYearsFromLabels <- function(tips, dateFormat='%Y-%m-%d'
 				}
 			} else{
 				Ti <- .optim.Ti0( omegas, td, scale_var_by_rate=FALSE )
-			}
+			} 
+			Ti <- .fix.Ti( Ti, td ) 
 			if ( (1 / sqrt(r)) < CV_LB){
 				# switch to poisson model
-				o <- .optim.omega.poisson0(Ti, .mean.rate(Ti, r, gammatheta, omegas, td), td, lnd.mean.rate.prior , meanRateLimits)
+				o <- .optim.omega.poisson0(Ti
+				  , mean(omegas)
+				  , td, lnd.mean.rate.prior , meanRateLimits)
 				gammatheta <- unname(o$omega)
 				if (!is.infinite(r)) lastll <- -Inf # the first time it switches, do not do likelihood comparison 
 				r <- Inf#unname(o$omega)
@@ -395,32 +470,65 @@ sampleYearsFromLabels <- function(tips, dateFormat='%Y-%m-%d'
 				edge_lls <- 0
 				omegas <- rep( gammatheta, length(omegas))
 			} else{
-				o <- .optim.r.gammatheta.nbinom0(  Ti, r, gammatheta, td, lnd.mean.rate.prior )
-				r <- o$r
-				ll <- o$ll
-				gammatheta <- o$gammatheta
-				oo <- .optim.omegas.gammaPoisson1( Ti, o$r, o$gammatheta, td ) 
+				if (clock == 'uncorrelated')
+				{
+					o <- .optim.r.gammatheta.nbinom0(  Ti, r, gammatheta, td, lnd.mean.rate.prior )
+					r <- o$r
+					ll <- o$ll
+					gammatheta <- o$gammatheta
+					oo <- .optim.omegas.gammaPoisson1( Ti, o$r, o$gammatheta, td )
+				} else if (clock=='additive'){
+					o <- .optim.nbinom1( Ti, mu, sp, td, lnd.mean.rate.prior )
+					mu = o$mu 
+					sp = o$sp 
+					ll = o$ll 
+					oo = .optim.omegas.gammaPoisson2( Ti, mu, sp , td )
+				} else{
+					stop('invalid value for *clock*')
+				}
 				edge_lls <- oo$lls
 				omegas <- oo$omegas
 			}
-			
+						
 			if (EST_SAMP_TIMES)
 			{
 				o_sts <- .optim.sampleTimes0( Ti, omegas, estimateSampleTimes,estimateSampleTimes_densities, td, iedge_tiplabel_est_samp_times )
 				sts[tiplabel_est_samp_times] <- o_sts
 				td$sts[tiplabel_est_samp_times] <- o_sts
+				td$sts1[tiplabel_est_samp_times] <- o_sts
 				td$sts2[tiplabel_est_samp_times] <- o_sts
 			}
 			
 			if (!quiet)
 			{ 
-				print( data.frame( iteration = iter, median_unadjusted_rate = median(omegas),  coef_of_var =  1 / sqrt(r) ), tmrca = min(Ti), logLik=ll , row.names=iter)
+				print( data.frame( iteration = iter, median_unadjusted_rate = median(omegas)
+				 ,  coef_of_var =  sd(omegas) / mean(omegas) # 1 / sqrt(r) 
+				 , tmrca = min(Ti), logLik=ll , row.names=iter) )
 				cat( '---\n' )
 			}
-			omega <- .mean.rate(Ti, r, gammatheta, omegas, td)
+			
+			if (clock !='strict'){
+				blen <- .Ti2blen( Ti, td )
+				omega <- sum( omegas * blen ) / sum(blen)
+			} else{#strict
+				omega <- omegas[1]
+			}
+			
+			if ( clock=='strict'){
+				meanRate = omegas[1]
+			} else if (clock=='uncorrelated' ){
+				meanRate <- ( r * gammatheta / td$s )
+				#NB:  r, tau phi / (1 = tau * phi )
+				# Gamma: r ,  phi * tau 
+			} else if( clock=='additive'){
+				meanRate <- mu / td$s
+			}
+
+			
 			if ( ll >= lastll ){
 				rv <- list( omegas = omegas, r = unname(r), theta = unname(gammatheta), Ti = Ti
-				 , meanRate = omega
+				 , adjusted.mean.rate = omega
+				 , mean.rate = meanRate
 				 , loglik = ll
 				 , edge_lls = edge_lls )
 			}
@@ -444,12 +552,17 @@ sampleYearsFromLabels <- function(tips, dateFormat='%Y-%m-%d'
 	
 	rv <- bestrv
 	
-	#.tre <- tre
-	td$minblen <- -Inf; 
-	blen <- .Ti2blen( rv$Ti, td )
-	#tre$edge.length <- blen 
-	#rv$tre <- tre
-	
+	# one last round of st estimation b/c td$sts may not match bestrv 
+	if (EST_SAMP_TIMES)
+	{
+		o_sts <- .optim.sampleTimes0( rv$Ti, rv$omegas, estimateSampleTimes,estimateSampleTimes_densities, td, iedge_tiplabel_est_samp_times )
+		sts[tiplabel_est_samp_times] <- o_sts
+		td$sts[tiplabel_est_samp_times] <- o_sts
+		td$sts1[tiplabel_est_samp_times] <- o_sts
+		td$sts2[tiplabel_est_samp_times] <- o_sts
+	}
+
+	blen <- .Ti2blen( rv$Ti, td , enforce_minblen=FALSE)
 	rv$edge <- tre$edge
 	rv$edge.length <- blen
 	rv$tip.label <- tre$tip.label
@@ -461,8 +574,8 @@ sampleYearsFromLabels <- function(tips, dateFormat='%Y-%m-%d'
 	rv$sts <- sts
 	rv$minblen <- minblen
 	rv$intree <- tre #.tre
-	rv$coef_of_variation <- ifelse( is.numeric(rv$r), 1 / sqrt(rv$r), NA )
-	rv$clock <- ifelse( is.infinite(rv$r), 'strict', 'relaxed')
+	rv$coef_of_variation <- sd(rv$omegas) / mean(rv$omegas) #ifelse( is.numeric(rv$r), 1 / sqrt(rv$r), NA )  #
+	rv$clock <- clock
 	rv$intree_rooted <- intree_rooted
 	rv$is_intree_rooted <- intree_rooted
 	rv$temporalConstraints <- temporalConstraints
@@ -473,16 +586,29 @@ sampleYearsFromLabels <- function(tips, dateFormat='%Y-%m-%d'
 	rv$numStartConditions <- numStartConditions
 	rv$lnd.mean.rate.prior <- lnd.mean.rate.prior
 	rv$meanRateLimits <- meanRateLimits
+	rv$relaxedClockModel = clock 
+	rv$mu <- mu
+	rv$sp <- sp 
+	rv$omega0 = omega0
+	rv$omega0s = omega0s
+	
 	
 	# add pvals for each edge
-	if (rv$clock=='relaxed'){
+	if (rv$clock=='uncorrelated'){
 		rv$edge.p <- with(rv, {
-		blen <- pmax(minblen, edge.length)
-		ps <- pmin(1 - 1e-12, theta * blen/(1 + theta * blen))
+			blen <- pmax(minblen, edge.length)
+			ps <- pmax(1e-12, pmin(1 - 1e-12, theta * blen/(1 + theta * blen)) )
 			pnbinom(pmax(0, round(intree$edge.length * s)), size = r, 
-				prob = 1 - ps)
-		})
-	} else{
+					prob = 1 - ps)
+			})
+	} else if ( rv$clock=='additive'){
+			rv$edge.p <- with(rv, {
+				blen <- pmax(minblen, edge.length)
+				sizes = mu * blen / sp 
+				pnbinom(pmax(0, round(intree$edge.length * s)), size = sizes, 
+					prob = 1 - sp / (1+sp) )
+			})
+	} else if (rv$clock=='strict') {
 		rv$edge.p <- with(rv, {
 			blen <- pmax(minblen, edge.length)
 			ppois(pmax(0, round(intree$edge.length * s)), blen * 
@@ -503,9 +629,12 @@ sampleYearsFromLabels <- function(tips, dateFormat='%Y-%m-%d'
 #' of the sequences used to estimate the tree. If the tree is not
 #' rooted, this function will estimate the root position. 
 #' For an introduction to all options and features, see the vignette on Influenza H3N2: vignette("h3n2")
+#'
+#' Multiple molecular clock models are supported including a strict clock and two variations on relaxed clocks. The 'uncorrelated' relaxed clock is the Gamma-Poisson mixture presented by Volz and Frost (2017), while the 'additive' variance model was developed by Didelot & Volz (2019). 
 #' 
 #' @section References:
 #' E.M. Volz and Frost, S.D.W. (2017) Scalable relaxed clock phylogenetic dating. Virus Evolution.
+#' X. Didelot and Volz, E.M. (2019) Additive uncorrelated relaxed clock models.
 #' 
 #' @param tre An ape::phylo which describes the phylogeny with branches in
 #'        units of substitutions per site. This may be a rooted or
@@ -517,7 +646,7 @@ sampleYearsFromLabels <- function(tips, dateFormat='%Y-%m-%d'
 #'        Vector must be named with names corresponding to
 #'        tre$tip.label.
 #' @param s Sequence length (numeric). This should correspond to sequence length used in phylogenetic analysis and will not necessarily be the same as genome length. 
-#' @param omega0 Initial guess of the mean substitution rate (substitutions
+#' @param omega0 Vector providing initial guess or guesses of the mean substitution rate (substitutions
 #'        per site per unit time). If not provided, will guess using
 #'        root to tip regression.
 #' @param minblen Minimum branch length in calendar time. By default, this will
@@ -534,8 +663,7 @@ sampleYearsFromLabels <- function(tips, dateFormat='%Y-%m-%d'
 #'        ancestor node in the phylogeny occurs before all progeny.
 #'        Equivalently, this will preclude negative branch lengths.
 #'        Note that execution is faster if this option is FALSE.
-#' @param strictClock If TRUE, will fit a Poisson evolutionary model without
-#'        rate variation.
+#' @param clock The choice of molecular clock model. Choices are 'uncorrelated', 'additive', or 'strict'. 
 #' @param estimateSampleTimes If some sample times are not known with certainty,
 #'         bounds can be provided with this option. This should take the
 #'         form of a data frame with columns 'lower' and 'upper'
@@ -572,7 +700,7 @@ sampleYearsFromLabels <- function(tips, dateFormat='%Y-%m-%d'
 #' # modify edge length to represent evolutionary distance with rate 1e-3:
 #' tre$edge.length <- tre$edge.length * 1e-3
 #' # treedater: 
-#' td <- dater( tre, sts =sts )
+#' td <- dater( tre, sts =sts , s = 1000, clock='strict', omega0=.0015)
 #'
 #'
 #' @export 
@@ -584,17 +712,22 @@ dater <- function(tre, sts, s=1e3
  , searchRoot = 5
  , quiet = TRUE
  , temporalConstraints = TRUE
- , strictClock = FALSE
+ , clock = c('strict' , 'uncorrelated', 'additive')
  , estimateSampleTimes = NULL
  , estimateSampleTimes_densities= list()
- , numStartConditions = 0
+ , numStartConditions = 1
  , clsSolver=c('limSolve', 'mgcv')
  , meanRateLimits = NULL
  , ncpu = 1
  , parallel_foreach = FALSE
 )
 { 
-	clsSolver <- match.arg( clsSolver) #clsSolver[1]	
+	clsSolver <- match.arg( clsSolver, choices = c('limSolve', 'mgcv'))
+	clock <- match.arg( clock , choices = c('strict' , 'uncorrelated', 'additive') ) 
+	# defaults
+	if ( is.na( omega0 ) ){
+		cat('Note: Initial guess of substitution rate not provided. Will attempt to guess starting conditions. Provide initial guesses of the rate using *omega0* parameter. \n')
+	}
 	if (!is.binary( tre ) ){
 		cat( 'Note: *dater* called with non binary tree. Will proceed after resolving polytomies.\n' )
 		if ( !is.rooted( tre )){
@@ -699,7 +832,8 @@ dater <- function(tre, sts, s=1e3
 				`%dopar%` <- foreach::`%dopar%`
 				tds <- foreach::foreach( t = iterators::iter( rtres )) %dopar% {
 					.dater( t, sts, s = s, omega0=omega0, minblen=minblen, maxit=maxit,abstol=abstol
-						, strictClock = strictClock, temporalConstraints = temporalConstraints, quiet = quiet
+						, clock = clock 
+						, temporalConstraints = temporalConstraints, quiet = quiet
 						, estimateSampleTimes = estimateSampleTimes
 						, estimateSampleTimes_densities = estimateSampleTimes_densities  
 						, numStartConditions = numStartConditions
@@ -711,7 +845,8 @@ dater <- function(tre, sts, s=1e3
 			} else{
 				tds <- parallel::mclapply( rtres, function(t){
 					.dater( t, sts, s = s, omega0=omega0, minblen=minblen, maxit=maxit,abstol=abstol
-						, strictClock = strictClock, temporalConstraints = temporalConstraints, quiet = quiet
+						, clock = clock 
+						, temporalConstraints = temporalConstraints, quiet = quiet
 						, estimateSampleTimes = estimateSampleTimes
 						, estimateSampleTimes_densities = estimateSampleTimes_densities  
 						, numStartConditions = numStartConditions
@@ -724,7 +859,8 @@ dater <- function(tre, sts, s=1e3
 		} else{
 			tds <- lapply( rtres, function(t) {
 				.dater( t, sts, s = s, omega0=omega0, minblen=minblen, maxit=maxit,abstol=abstol
-					, strictClock = strictClock, temporalConstraints = temporalConstraints, quiet = quiet
+					, clock = clock 
+					, temporalConstraints = temporalConstraints, quiet = quiet
 					, estimateSampleTimes = estimateSampleTimes
 					, estimateSampleTimes_densities = estimateSampleTimes_densities  
 					, numStartConditions = numStartConditions
@@ -743,7 +879,7 @@ dater <- function(tre, sts, s=1e3
 		cat( 'Tree is rooted. Not estimating root position.\n')
 	}
 	td = .dater( tre, sts, s = s, omega0=omega0, minblen=minblen, maxit=maxit,abstol=abstol
-		, strictClock = strictClock, temporalConstraints = temporalConstraints
+		, clock = clock
 		, quiet = quiet
 		, estimateSampleTimes = estimateSampleTimes
 		, estimateSampleTimes_densities = estimateSampleTimes_densities  
@@ -767,9 +903,11 @@ print.treedater <- function(x, ...){
     cat(paste( x$timeOfMRCA, '\n') )
     cat('\n Time to common ancestor (before most recent sample) \n' )
     cat(paste( x$timeToMRCA, '\n') )
-    cat( '\n Mean substitution rate \n')
-    cat(paste( x$meanRate , '\n'))
-    cat( '\n Strict or relaxed clock \n')
+    cat( '\n Weighted mean substitution rate (adjusted by branch lengths) \n')
+    cat(paste( x$adjusted.mean.rate , '\n'))
+    cat( '\n Unadjusted mean substitution rate \n')
+    cat(paste( x$mean.rate , '\n'))
+    cat( '\n Clock model  \n')
     cat(paste( x$clock , '\n'))
     cat( '\n Coefficient of variation of rates \n')
     cat(paste( x$coef_of_variation, '\n' ))
@@ -806,7 +944,7 @@ The following steps may help to fix or alleviate common problems:
 * Check that the vector of sample times is correctly named and that the units are correct. 
 * If passing a rooted tree, make sure that the root position was chosen correctly, or estimate the root position by passing an unrooted tree (e.g. pass ape::unroot(tree))
 * The root position may be poorly estimated. Try increasing the _searchRoot_ parameter in order to test more lineages as potential root positions. 
-* The model may be fitted by a relaxed or strict molecular clock. Try changing the _strictClock_ parameter 
+* The model may be fitted by a relaxed or strict molecular clock. Try changing the _clock_ parameter 
 * A poor fit may be due to a small number of lineages with unusual / outlying branch lengths which can occur due to sequencing error or poor alignment. Try the *outlierTips* command to identify and remove these lineages. 
 * Check that there is adequate variance in sample times in order to estimate a molecular clock by doing a root-to-tip regression. Try the *rootToTipRegressionPlot* command. If the clock rate can not be reliably estimated, you can fix the value to a range using the _meanRateLimits_ option which would estimate a time tree given the previous estimate of clock rates. 
 '
@@ -824,12 +962,13 @@ NOTE: The estimated coefficient of variation of clock rates is high (>1). Someti
 		\n')
 		cvprob <- TRUE 
 	}
-	success = requireNamespace('harmonicmeanp', quietly=TRUE)
-	if ( success ){
-	  pp <- harmonicmeanp::p.hmp( p )
-	} else {
-	  pp <- min( p.adjust( p, 'BH' ))
-	}
+	#~ success = requireNamespace('harmonicmeanp', quietly=TRUE)
+	#~ 	if ( success ){
+	#~ 	  pp <- harmonicmeanp::p.hmp( p )
+	#~ 	} else {
+	#~ 	  pp <- min( p.adjust( p, 'BH' ))
+	#~ 	}
+	pp <- min( p.adjust( p, 'BH' ))
 	
 	if ( pp < .025 ){
 		pprob <-  TRUE 
@@ -849,6 +988,9 @@ NOTE: The p values for lineage clock rates show at least one outlying value afte
 #' This function will print statistics computed from the linear regression model. 
 #' 
 #' @param td A fitted treedater object 
+#' @param show.tip.labels If TRUE, the names of each sample will be plotted at the their corresponding time and evoutionary distance
+#' @param textopts An optional list of parameters for plotted tip labels. Passed to the *text* function. 
+#' @param pointopts An optional list of parameters for plotted points if showing tip labels. Passed to the *points* function. 
 #' @param ... Additional arguments are passed to plot
 #' @return The fitted linear model (class 'lm')
 #' @examples
@@ -860,13 +1002,13 @@ NOTE: The p values for lineage clock rates show at least one outlying value afte
 #' # modify edge length to represent evolutionary distance with rate 1e-3:
 #' tre$edge.length <- tre$edge.length * 1e-3
 #' # treedater: 
-#' td <- dater( tre, sts =sts )
+#' td <- dater( tre, sts =sts, clock='strict', s = 1000, omega0=.0015 )
 #' # root to tip regression: 
 #' fit = rootToTipRegressionPlot( td )
 #' summary(fit)
 #' 
 #' @export 
-rootToTipRegressionPlot <- function(td, ... ){
+rootToTipRegressionPlot <- function(td, show.tip.labels=FALSE, textopts = NULL, pointopts=NULL, ... ){
 	stopifnot( inherits( td, 'treedater'))
 	dT <- ape::node.depth.edgelength( td  )
 	dG <- ape::node.depth.edgelength( td$intree )
@@ -875,12 +1017,26 @@ rootToTipRegressionPlot <- function(td, ... ){
 	nts <- (td$timeOfMRCA+dT)
 	mtip  <- lm( dG[1:ape::Ntip(td)] ~ sts )
 	mall  <- lm( dG ~ nts )
-	graphics::plot( dT + td$timeOfMRCA, dG
-	  , col = c(rep('red', ape::Ntip(td)), rep('black', ape::Nnode(td) ) )  
-	  , xlab = '' 
-	  , ylab = 'Evolutionary distance'
-	  , ... 
-	)
+	if ( !show.tip.labels){
+		graphics::plot( dT + td$timeOfMRCA, dG
+		  , col = c(rep('red', ape::Ntip(td)), rep('black', ape::Nnode(td) ) )  
+		  , xlab = '' 
+		  , ylab = 'Evolutionary distance'
+		  , ... 
+		)
+	} else {
+		i <- 1:ape::Ntip(td)
+		j <- (ape::Ntip(td)+1):( ape::Ntip(td) + ape::Nnode(td) ) 
+		graphics::plot( x = NULL, y = NULL 
+		  , xlab = '' 
+		  , ylab = 'Evolutionary distance'
+		  , xlim = range( dT + td$timeOfMRCA)
+		  , ylim = range( dG ) 
+		  , ...
+		)
+		do.call( graphics::points, c( pointopts, list(x =   dT[j] + td$timeOfMRCA, y = dG[j] )))
+		do.call( graphics::text, c( list( x = dT[i] + td$timeOfMRCA, y = dG[i] , labels=td$tip.label ), textopts ) )
+	}
 	graphics::abline( a = coef(mtip)[1], b = coef(mtip)[2], col = 'red' ) 
 	graphics::abline( a = coef(mall)[1], b = coef(mall)[2], col = 'black' ) 
 	smtip <- summary( mtip )
