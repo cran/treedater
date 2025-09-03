@@ -4,13 +4,26 @@
 \alias{dater}
 \title{Estimate a time-scaled tree and fit a molecular clock}
 \usage{
-dater(tre, sts, s = 1000, omega0 = NA, minblen = NA, maxit = 100,
-  abstol = 1e-04, searchRoot = 5, quiet = TRUE,
-  temporalConstraints = TRUE, clock = c("strict", "uncorrelated",
-  "additive"), estimateSampleTimes = NULL,
-  estimateSampleTimes_densities = list(), numStartConditions = 1,
-  clsSolver = c("limSolve", "mgcv"), meanRateLimits = NULL, ncpu = 1,
-  parallel_foreach = FALSE)
+dater(
+  tre,
+  sts,
+  s = 1000,
+  omega0 = NA,
+  minblen = NA,
+  maxit = 100,
+  abstol = 1e-04,
+  searchRoot = 5,
+  quiet = TRUE,
+  temporalConstraints = TRUE,
+  clock = c("strict", "uncorrelated", "additive"),
+  estimateSampleTimes = NULL,
+  estimateSampleTimes_densities = list(),
+  numStartConditions = 1,
+  clsSolver = c("limSolve", "mgcv"),
+  meanRateLimits = NULL,
+  ncpu = 1,
+  parallel_foreach = FALSE
+)
 }
 \arguments{
 \item{tre}{An ape::phylo which describes the phylogeny with branches in
@@ -50,7 +63,7 @@ ancestor node in the phylogeny occurs before all progeny.
 Equivalently, this will preclude negative branch lengths.
 Note that execution is faster if this option is FALSE.}
 
-\item{clock}{The choice of molecular clock model. Choices are 'uncorrelated', 'additive', or 'strict'.}
+\item{clock}{The choice of molecular clock model. Choices are 'strict'(default), 'uncorrelated', or 'additive'}
 
 \item{estimateSampleTimes}{If some sample times are not known with certainty,
 bounds can be provided with this option. This should take the
@@ -88,15 +101,16 @@ Estimates the calendar time of nodes in the given phylogenetic
 tree with branches in units of substitutions per site. The
 calendar time of each sample must also be specified and the length
 of the sequences used to estimate the tree. If the tree is not
-rooted, this function will estimate the root position. 
+rooted, this function will estimate the root position.
 For an introduction to all options and features, see the vignette on Influenza H3N2: vignette("h3n2")
 
 Multiple molecular clock models are supported including a strict clock and two variations on relaxed clocks. The 'uncorrelated' relaxed clock is the Gamma-Poisson mixture presented by Volz and Frost (2017), while the 'additive' variance model was developed by Didelot & Volz (2019).
 }
 \section{References}{
 
-E.M. Volz and Frost, S.D.W. (2017) Scalable relaxed clock phylogenetic dating. Virus Evolution.
-X. Didelot and Volz, E.M. (2019) Additive uncorrelated relaxed clock models.
+Volz, E. M., & Frost, S. D. (2017). Scalable relaxed clock phylogenetic dating. Virus evolution, 3(2), vex025.
+
+Didelot, X., Siveroni, I., & Volz, E. M. (2021). Additive uncorrelated relaxed clock models for the dating of genomic epidemiology phylogenies. Molecular Biology and Evolution, 38(1), 307-317.
 }
 
 \examples{
@@ -107,7 +121,7 @@ tre <- ape::rtree(50)
 sts <- setNames( ape::node.depth.edgelength( tre )[1:ape::Ntip(tre)], tre$tip.label)
 # modify edge length to represent evolutionary distance with rate 1e-3:
 tre$edge.length <- tre$edge.length * 1e-3
-# treedater: 
+# treedater:
 td <- dater( tre, sts =sts , s = 1000, clock='strict', omega0=.0015)
 
 

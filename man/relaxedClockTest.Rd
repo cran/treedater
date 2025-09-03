@@ -4,8 +4,7 @@
 \alias{relaxedClockTest}
 \title{Use parametric bootstrap to test if relaxed clock offers improved fit to data.}
 \usage{
-relaxedClockTest(..., nreps = 100, overrideTempConstraint = T,
-  ncpu = 1)
+relaxedClockTest(..., nreps = 100, overrideTempConstraint = T, ncpu = 1)
 }
 \arguments{
 \item{...}{arguments passed to *dater*}
@@ -21,7 +20,7 @@ A list with elements:
 \itemize{
 \item strict_treedater: A dater object under a strict clock
 \item relaxed_treedater: A dater object under a relaxed clock
-\item clock: The favoured clock model 
+\item clock: The favored clock model
 \item parboot: Result of call to *parboot* using fitted treedater and forcing a relaxed clock
 \item nullHypothesis_coef_of_variation_CI: The null hypothesis CV
 }
@@ -41,7 +40,7 @@ This function will print the optimal clock model
      clock). Parameters passed to this function should be the same as when calling *dater*.
 }
 \examples{
-# simulate a tree 
+# simulate a tree
 tre <- ape::rtree(25)
 # sample times based on distance from root to tip:
 sts <- setNames( ape::node.depth.edgelength( tre )[1:ape::Ntip(tre)], tre$tip.label)

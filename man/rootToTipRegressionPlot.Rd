@@ -4,13 +4,18 @@
 \alias{rootToTipRegressionPlot}
 \title{Plot evolutionary distance from root to sample times and estimated internal node times and regression lines}
 \usage{
-rootToTipRegressionPlot(td, show.tip.labels = FALSE, textopts = NULL,
-  pointopts = NULL, ...)
+rootToTipRegressionPlot(
+  td,
+  show.tip.labels = FALSE,
+  textopts = NULL,
+  pointopts = NULL,
+  ...
+)
 }
 \arguments{
 \item{td}{A fitted treedater object}
 
-\item{show.tip.labels}{If TRUE, the names of each sample will be plotted at the their corresponding time and evoutionary distance}
+\item{show.tip.labels}{If TRUE, the names of each sample will be plotted at the their corresponding time and evolutionary distance}
 
 \item{textopts}{An optional list of parameters for plotted tip labels. Passed to the *text* function.}
 
@@ -22,7 +27,7 @@ rootToTipRegressionPlot(td, show.tip.labels = FALSE, textopts = NULL,
 The fitted linear model (class 'lm')
 }
 \description{
-If a range of sample times was given, these will be estimated. Red and black respectively indicate sample and internal nodes. 
+If a range of sample times was given, these will be estimated. Red and black respectively indicate sample and internal nodes.
 This function will print statistics computed from the linear regression model.
 }
 \examples{
@@ -33,9 +38,9 @@ tre <- ape::rtree(50)
 sts <- setNames( ape::node.depth.edgelength( tre )[1:ape::Ntip(tre)], tre$tip.label)
 # modify edge length to represent evolutionary distance with rate 1e-3:
 tre$edge.length <- tre$edge.length * 1e-3
-# treedater: 
+# treedater:
 td <- dater( tre, sts =sts, clock='strict', s = 1000, omega0=.0015 )
-# root to tip regression: 
+# root to tip regression:
 fit = rootToTipRegressionPlot( td )
 summary(fit)
 

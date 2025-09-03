@@ -2,10 +2,15 @@
 % Please edit documentation in R/treedater0.R
 \name{sampleYearsFromLabels}
 \alias{sampleYearsFromLabels}
-\title{Compute a vector of numeric sample times from labels in a sequence aligment or phylogeny}
+\title{Compute a vector of numeric sample times from labels in a sequence alignment or phylogeny}
 \usage{
-sampleYearsFromLabels(tips, dateFormat = "\%Y-\%m-\%d",
-  delimiter = NULL, index = NULL, regex = NULL)
+sampleYearsFromLabels(
+  tips,
+  dateFormat = "\%Y-\%m-\%d",
+  delimiter = NULL,
+  index = NULL,
+  regex = NULL
+)
 }
 \arguments{
 \item{tips}{A character vector supplying the name of each sample}
@@ -22,14 +27,14 @@ sampleYearsFromLabels(tips, dateFormat = "\%Y-\%m-\%d",
 Numeric vector with sample time in decimal format.
 }
 \description{
-Compute a vector of numeric sample times from labels in a sequence aligment or phylogeny
+Compute a vector of numeric sample times from labels in a sequence alignment or phylogeny
 }
 \examples{
-## A couple of labels for Ebola virus sequences: 
+## A couple of labels for Ebola virus sequences:
 sampleYearsFromLabels( c('EBOV|AA000000|EM104|SierraLeone_EM|2014-06-02'
                        , 'EBOV|AA000000|G3713|SierraLeone_G|2014-06-09')
 , delimiter='|' )
-## Equivalently: 
+## Equivalently:
 sampleYearsFromLabels( c('EBOV|AA000000|EM104|SierraLeone_EM|2014-06-02'
                        , 'EBOV|AA000000|G3713|SierraLeone_G|2014-06-09')
  , regex='[0-9]+-[0-9]+-[0-9]+')
